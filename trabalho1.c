@@ -335,6 +335,7 @@ void* helicopter_thread_func(void* arg) {
             break;
         }
 
+        //colisão com a ponte
         else if (helicopter.y == BRIDGE_Y_LEVEL && helicopter.x >= BRIDGE_START_X && helicopter.x <= BRIDGE_END_X) {
             helicopter.status = H_EXPLODED;
             pthread_mutex_lock(&game_state.mutex);
