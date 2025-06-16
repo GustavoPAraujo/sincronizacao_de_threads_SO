@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <time.h>
+#include <math.h>
 
 // --- Configurações do Jogo ---
 #define SCREEN_WIDTH 80
@@ -78,10 +79,14 @@ typedef struct {
 
 typedef struct {
     int x, y;
+
+    float precise_x, precise_y;
+    
+    float dx, dy;
+
     bool active;
-    int owner_battery_id; // Para debug ou lógicas futuras
-    pthread_t thread_id; // Cada foguete tem sua thread
-    // Não precisa de mutex próprio se gerenciado pela lista global
+    int owner_battery_id; 
+    pthread_t thread_id; 
 } Rocket;
 
 // Estado global do jogo
@@ -432,32 +437,63 @@ void* battery_thread_func(void* arg) {
         // Lógica da bateria (disparar, mover para recarga, etc.)
         switch (self->status) {
             case B_FIRING:
-                if (self->ammo > 0) {
-                    if (rand() % 20 == 0) { // Chance de disparar (ajustar frequência)
-                        pthread_mutex_lock(&mutex_rocket_list);
-                        for (int i = 0; i < MAX_ROCKETS; i++) {
-                            if (!active_rockets[i].active) {
-                                active_rockets[i].active = true;
-                                active_rockets[i].x = self->x;
-                                active_rockets[i].y = self->y - 1; // Dispara de cima da bateria
-                                active_rockets[i].owner_battery_id = self->id;
+            if (self->ammo > 0) {
+                if (rand() % 20 == 0) { 
+                                        
+                    // 1. Obter a posição do helicóptero de forma segura
+                    int helicopter_x, helicopter_y;
+                    pthread_mutex_lock(&helicopter.mutex);
+                    helicopter_x = helicopter.x;
+                    helicopter_y = helicopter.y;
+                    pthread_mutex_unlock(&helicopter.mutex);
 
-                                // Passar o índice como argumento para a thread do foguete
-                                // É crucial que rocket_idx_args[i] seja estável ou uma cópia seja feita
-                                // Uma forma é ter um array de ints e passar o ponteiro para o elemento
-                                pthread_create(&active_rockets[i].thread_id, NULL, rocket_thread_func, &rocket_idx_args[i]);
-                                pthread_detach(active_rockets[i].thread_id); // Foguetes são independentes
+                    // 2. Calcular o vetor do inimigo para o helicóptero
+                    float vector_x = helicopter_x - self->x;
+                    float vector_y = helicopter_y - self->y;
 
-                                self->ammo--;
-                                break;
-                            }
-                        }
-                        pthread_mutex_unlock(&mutex_rocket_list);
+                    // 3. Normalizar o vetor (para que seu "comprimento" seja 1)
+                    float length = sqrt(vector_x * vector_x + vector_y * vector_y);
+                    float normalized_dx = 0, normalized_dy = -1; // Padrão: atirar para cima se algo der errado
+                    if (length > 0) {
+                        normalized_dx = vector_x / length;
+                        normalized_dy = vector_y / length;
                     }
-                } else {
-                    self->status = B_MOVING_TO_BRIDGE;
+
+                    // 4. Definir a velocidade do foguete
+                    float rocket_speed = 0.7f; // Ajuste este valor para mudar a velocidade
+
+                    // --- FIM DA NOVA LÓGICA DE MIRA ---
+                    
+                    pthread_mutex_lock(&mutex_rocket_list);
+                    for (int i = 0; i < MAX_ROCKETS; i++) {
+                        if (!active_rockets[i].active) {
+                            active_rockets[i].active = true;
+                            
+                            // Posição inicial
+                            active_rockets[i].x = self->x;
+                            active_rockets[i].y = self->y - 1;
+                            active_rockets[i].precise_x = self->x;
+                            active_rockets[i].precise_y = self->y - 1;
+
+                            // Definir a trajetória calculada
+                            active_rockets[i].dx = normalized_dx * rocket_speed;
+                            active_rockets[i].dy = normalized_dy * rocket_speed;
+
+                            active_rockets[i].owner_battery_id = self->id;
+
+                            pthread_create(&active_rockets[i].thread_id, NULL, rocket_thread_func, &rocket_idx_args[i]);
+                            pthread_detach(active_rockets[i].thread_id);
+
+                            self->ammo--;
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&mutex_rocket_list);
                 }
-                break;
+            } else {
+                self->status = B_MOVING_TO_BRIDGE;
+            }
+            break;
 
             case B_MOVING_TO_BRIDGE:
                 if (self->y > BRIDGE_Y_LEVEL) self->y--;
@@ -580,19 +616,26 @@ end_battery_loop:
 
 void* rocket_thread_func(void* arg) {
     int rocket_idx = *((int*)arg);
-    // Não precisa de mutex para rocket_idx em si, pois é um valor copiado para o stack da thread
-    // Mas o acesso a active_rockets[rocket_idx] precisa ser sincronizado
+    Rocket* self = &active_rockets[rocket_idx]; // Ponteiro para o foguete para facilitar
 
     while (game_running) {
         bool still_active = false;
+        
         pthread_mutex_lock(&mutex_rocket_list);
-        if (active_rockets[rocket_idx].active) {
-            active_rockets[rocket_idx].y--; // Foguetes sobem
+        if (self->active) {
+            // Atualiza a posição precisa com base na velocidade
+            self->precise_x += self->dx;
+            self->precise_y += self->dy;
 
-            if (active_rockets[rocket_idx].y < 0) { // Saiu da tela por cima
-                active_rockets[rocket_idx].active = false;
+            // Atualiza a posição de renderização (inteira)
+            self->x = (int)self->precise_x;
+            self->y = (int)self->precise_y;
+            
+            // Condição para desativar o foguete (saiu da tela)
+            if (self->y < 0 || self->y >= SCREEN_HEIGHT || self->x < 0 || self->x >= SCREEN_WIDTH) {
+                self->active = false;
             }
-            still_active = active_rockets[rocket_idx].active;
+            still_active = self->active;
         }
         pthread_mutex_unlock(&mutex_rocket_list);
 
