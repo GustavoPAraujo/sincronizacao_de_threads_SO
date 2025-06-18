@@ -97,10 +97,16 @@ typedef struct {
     pthread_mutex_t mutex;
 } GameState;
 
+typedef struct {
+    int x, y;
+    bool active;
+} Soldier;
+
 // --- Variáveis Globais ---
 Helicopter helicopter;
 Battery batteries[2];
 Rocket active_rockets[MAX_ROCKETS];
+Soldier soldiers[INITIAL_SOLDIERS_AT_ORIGIN];
 GameState game_state;
 
 pthread_mutex_t mutex_ponte;
@@ -135,6 +141,18 @@ void init_game_elements() {
     game_state.victory_flag = false;
     game_state.soldiers_at_origin_count = INITIAL_SOLDIERS_AT_ORIGIN;
     pthread_mutex_unlock(&game_state.mutex);
+
+    // Soldados
+    for(int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
+    do {
+        soldiers[i].x = ORIGIN_X + rand() % 6;
+        int dy = (rand() % 5) - 2;
+        soldiers[i].y = ORIGIN_Y + dy;
+        if (soldiers[i].y < 1) soldiers[i].y = 1;
+        if (soldiers[i].y > SCREEN_HEIGHT-2) soldiers[i].y = SCREEN_HEIGHT-2;
+    } while (soldiers[i].x == ORIGIN_X && soldiers[i].y == ORIGIN_Y);
+    soldiers[i].active = true;
+    }
 
     // Baterias
     int base_ammo;
@@ -369,11 +387,17 @@ void* helicopter_thread_func(void* arg) {
 
         // Lógica de Soldados
         pthread_mutex_lock(&game_state.mutex);
-        if (helicopter.x == ORIGIN_X && helicopter.y == ORIGIN_Y &&
-            game_state.soldiers_at_origin_count > 0 && helicopter.soldiers_on_board < 10 /*capacidade*/) {
-            helicopter.soldiers_on_board++;
-            game_state.soldiers_at_origin_count--;
-        }
+        for(int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
+            if (soldiers[i].active
+             && helicopter.x == soldiers[i].x
+             && helicopter.y == soldiers[i].y
+             && helicopter.soldiers_on_board < 10) {
+                soldiers[i].active = false;
+                helicopter.soldiers_on_board++;
+                game_state.soldiers_at_origin_count--;
+                break;
+            }
+        }    
         if (helicopter.x == PLATFORM_X && helicopter.y == PLATFORM_Y && helicopter.soldiers_on_board > 0) {
             helicopter.soldiers_rescued_total += helicopter.soldiers_on_board;
             helicopter.soldiers_on_board = 0;
@@ -668,6 +692,11 @@ void* game_manager_thread_func(void* arg) {
         for(int i=0; i<SCREEN_HEIGHT; ++i) {mvprintw(i, 0, "|"); mvprintw(i, SCREEN_WIDTH-1, "|");}
 
         mvprintw(PLATFORM_Y, PLATFORM_X, "%c", PLATFORM_CHAR);
+        for (int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
+            if (soldiers[i].active) {
+                mvprintw(soldiers[i].y, soldiers[i].x, "%c", SOLDIER_CHAR);
+            }
+        }
         mvprintw(ORIGIN_Y, ORIGIN_X, "%c (Restam: %d)", SOLDIER_CHAR, game_state.soldiers_at_origin_count);
         mvprintw(DEPOT_Y, DEPOT_X, "%c", DEPOT_CHAR);
         for (int x = BRIDGE_START_X; x <= BRIDGE_END_X; ++x) {
