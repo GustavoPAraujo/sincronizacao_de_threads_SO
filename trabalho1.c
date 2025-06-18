@@ -143,15 +143,20 @@ void init_game_elements() {
     pthread_mutex_unlock(&game_state.mutex);
 
     // Soldados
+    int max_soldier_x = SCREEN_WIDTH/2 - 2;
     for(int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
-    do {
-        soldiers[i].x = ORIGIN_X + rand() % 6;
-        int dy = (rand() % 5) - 2;
-        soldiers[i].y = ORIGIN_Y + dy;
-        if (soldiers[i].y < 1) soldiers[i].y = 1;
-        if (soldiers[i].y > SCREEN_HEIGHT-2) soldiers[i].y = SCREEN_HEIGHT-2;
-    } while (soldiers[i].x == ORIGIN_X && soldiers[i].y == ORIGIN_Y);
-    soldiers[i].active = true;
+        do {
+            // escolhe X na metade esquerda (fora da HUD)
+            soldiers[i].x = 1 + rand() % max_soldier_x;
+            // escolhe Y entre 1 e SCREEN_HEIGHT-3 (evita bordas)
+            soldiers[i].y = 1 + rand() % (SCREEN_HEIGHT - 3);
+            // recusa se cair na ponte
+        } while (
+            (soldiers[i].y == BRIDGE_Y_LEVEL
+            && soldiers[i].x >= BRIDGE_START_X
+            && soldiers[i].x <= BRIDGE_END_X)
+        );
+        soldiers[i].active = true;
     }
 
     // Baterias
@@ -697,7 +702,7 @@ void* game_manager_thread_func(void* arg) {
                 mvprintw(soldiers[i].y, soldiers[i].x, "%c", SOLDIER_CHAR);
             }
         }
-        mvprintw(ORIGIN_Y, ORIGIN_X, "%c (Restam: %d)", SOLDIER_CHAR, game_state.soldiers_at_origin_count);
+        //mvprintw(0, 2, "Restam: %2d", game_state.soldiers_at_origin_count);
         mvprintw(DEPOT_Y, DEPOT_X, "%c", DEPOT_CHAR);
         for (int x = BRIDGE_START_X; x <= BRIDGE_END_X; ++x) {
             mvprintw(BRIDGE_Y_LEVEL, x, "%c", BRIDGE_CHAR);
