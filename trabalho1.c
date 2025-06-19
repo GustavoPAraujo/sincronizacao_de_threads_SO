@@ -23,9 +23,9 @@
 #define INITIAL_SOLDIERS_AT_ORIGIN 10
 #define SOLDIERS_TO_WIN 10
 #define MAX_ROCKETS 20 // Máximo de foguetes ativos simultaneamente por todas as baterias
-#define MAX_AMMO_EASY 10
+#define MAX_AMMO_EASY 5
 #define MAX_AMMO_MEDIUM 7
-#define MAX_AMMO_HARD 5
+#define MAX_AMMO_HARD 10
 
 #define RECHARGE_TIME_EASY_MIN_MS 100
 #define RECHARGE_TIME_EASY_MAX_MS 200
