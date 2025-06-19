@@ -509,32 +509,32 @@ void* battery_thread_func(void* arg) {
 
             // --- FASE 1: IDA PARA O DEPÓSITO ---
             case B_REQUESTING_BRIDGE_TO_DEPOT:
-                pthread_mutex_unlock(&self->mutex); 
-                pthread_mutex_lock(&mutex_ponte);   
-                pthread_mutex_lock(&self->mutex);   
+                /* apenas muda de estado; sem lock ainda */
                 self->status = B_MOVING_TO_BRIDGE;
                 break;
 
-            case B_MOVING_TO_BRIDGE: 
-                /*  B0 entra pela direita    (BRIDGE_END_X)
-                    B1 entra pela direita    (já fazia isso)                */
-                int entry_x = (self->id == 0) ? BRIDGE_END_X   /* 70  */
-                                            : BRIDGE_END_X; /* idem */
+            case B_MOVING_TO_BRIDGE: {
+                const int entry_x = BRIDGE_END_X;   /* já alinhamos B0 e B1 p/ direita */
 
-                /* 1. Alinha X primeiro  */
+                /* 1. Caminha até a cabeceira ----------------------------- */
                 if (self->x != entry_x) {
                     self->x += (self->x < entry_x) ? 1 : -1;
 
-                /* 2. Depois sobe Y      */
                 } else if (self->y > BRIDGE_Y_LEVEL) {
                     self->y--;
 
-                /* 3. Chegou ao topo da cabeceira → atravessa ponte */
+                /* 2. Na cabeceira: tentar lock --------------------------- */
                 } else {
-                    self->status = B_ON_BRIDGE_TO_DEPOT;
+                    /* estamos em (entry_x, BRIDGE_Y_LEVEL) */
+                    if (pthread_mutex_trylock(&mutex_ponte) == 0) {
+                        /*  ponte livre – entra */
+                        self->status = B_ON_BRIDGE_TO_DEPOT;
+                    }
+                    /*  ponte ocupada – fica parado aqui até a próxima iteração */
                 }
                 break;
-            
+            }
+
             case B_ON_BRIDGE_TO_DEPOT:
                 target_x = BRIDGE_START_X;
                 if (self->x > target_x) self->x--;
