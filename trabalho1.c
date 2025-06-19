@@ -539,6 +539,7 @@ void* battery_thread_func(void* arg) {
                 target_x = BRIDGE_START_X;
                 if (self->x > target_x) self->x--;
                 else {
+                    pthread_mutex_unlock(&mutex_ponte);
                     self->status = B_MOVING_TO_DEPOT;
                 }
                 break;
@@ -547,7 +548,6 @@ void* battery_thread_func(void* arg) {
                 if (self->x > DEPOT_X) self->x--;
                 else if (self->y > DEPOT_Y) self->y--;
                 else {
-                    pthread_mutex_unlock(&mutex_ponte);
                     self->status = B_RECHARGING;
                 }
                 break;
