@@ -271,16 +271,10 @@ int main() {
 
     // Aguarda finalização das threads persistentes
     pthread_join(tid_helicopter, NULL);
-    // As threads das baterias e do gerenciador terminarão quando game_running for false
-    // O join delas garante que a limpeza ocorra após elas realmente terminarem.
     pthread_join(tid_battery0, NULL);
     pthread_join(tid_battery1, NULL);
     pthread_join(tid_game_manager, NULL);
-    // Threads de foguetes são detached ou devem ser joined por quem as criou (baterias)
-    // Para simplificar, vamos considerar que elas terminam e pronto. Se precisarmos
-    // de join para elas, a bateria que a criou teria que rastreá-las.
-    // Uma forma mais simples é elas apenas terminarem e a lista de foguetes ser gerenciada.
-
+    
     // Limpeza
     cleanup_game_resources();
     clear();
@@ -321,9 +315,6 @@ void* helicopter_thread_func(void* arg) {
         }
 
         // Movimentação
-        int prev_x = helicopter.x;
-        int prev_y = helicopter.y;
-
         switch (input) {
             case KEY_UP:    helicopter.y--; break;
             case KEY_DOWN:  helicopter.y++; break;
@@ -332,12 +323,12 @@ void* helicopter_thread_func(void* arg) {
         }
 
         // Limites da tela
-        if (helicopter.x < 0) helicopter.x = 0;
-        if (helicopter.x >= SCREEN_WIDTH -1) helicopter.x = SCREEN_WIDTH - 2; // -1 para char, -1 para borda
-        if (helicopter.y < 0) helicopter.y = 0; // Colisão com o topo
+        if (helicopter.x < 1) helicopter.x = 1;
+        if (helicopter.x >= SCREEN_WIDTH -1) helicopter.x = SCREEN_WIDTH - 2;
+        if (helicopter.y < 1) helicopter.y = 1; 
         if (helicopter.y >= SCREEN_HEIGHT -1) helicopter.y = SCREEN_HEIGHT - 2;
-
-        // Colisão com o topo
+        
+        // Colisão com o topo (borda)
         if (helicopter.y == 0) {
             helicopter.status = H_EXPLODED;
             pthread_mutex_lock(&game_state.mutex);
@@ -348,8 +339,8 @@ void* helicopter_thread_func(void* arg) {
             break;
         }
 
+
         // Colisão com chão/plataforma/depósito/baterias (obstáculos fixos)
-        // Simplificado: apenas se na mesma linha e coluna
         if (helicopter.y == PLATFORM_Y && helicopter.x == PLATFORM_X) { /* Não explode na plataforma */ }
         else if (helicopter.y == ORIGIN_Y && helicopter.x == ORIGIN_X) { /* Não explode na origem */ }
         else if (helicopter.y == DEPOT_Y && helicopter.x == DEPOT_X) { /* Não explode no depósito - mas não deveria estar lá */ }
@@ -371,7 +362,7 @@ void* helicopter_thread_func(void* arg) {
             game_running = false;
             pthread_mutex_unlock(&game_state.mutex);
             pthread_mutex_unlock(&helicopter.mutex);
-            break; // Sai do loop principal da thread
+            break; 
         }
 
         for(int i=0; i<2; ++i) {
@@ -426,7 +417,7 @@ void* helicopter_thread_func(void* arg) {
                 game_state.game_over_flag = true;
                 game_running = false;
                 pthread_mutex_unlock(&game_state.mutex);
-                break; // Sai do loop de foguetes
+                break; 
             }
         }
         pthread_mutex_unlock(&mutex_rocket_list);
@@ -440,148 +431,133 @@ void* helicopter_thread_func(void* arg) {
         pthread_mutex_unlock(&helicopter.mutex);
         if(should_break) break;
 
-        usleep(100000); // 100ms de delay para controle do helicóptero
+        usleep(100000); 
     }
 end_helicopter_loop:
-    // Garante que o mutex do helicóptero seja liberado se saiu por goto
-    // No entanto, a estrutura com break é mais segura. Tentando evitar goto.
-    // pthread_mutex_trylock(&helicopter.mutex); // Tenta pegar, se não conseguir, já está livre.
-    // pthread_mutex_unlock(&helicopter.mutex); // Libera se pegou. Não é ideal.
-    // O ideal é garantir que todos os caminhos liberem.
-    // Se o loop termina por game_running=false, o mutex já foi liberado.
-    // Se termina por colisão, o mutex foi liberado antes do break.
     return NULL;
 }
 
 void* battery_thread_func(void* arg) {
     int battery_id = *((int*)arg);
     Battery* self = &batteries[battery_id];
-    int rocket_idx_args[MAX_ROCKETS]; // Para passar o índice do foguete para a thread do foguete
-     for(int i=0; i<MAX_ROCKETS; ++i) rocket_idx_args[i] = i;
+    int rocket_idx_args[MAX_ROCKETS]; 
+    for(int i=0; i<MAX_ROCKETS; ++i) rocket_idx_args[i] = i;
 
 
     while (game_running) {
         pthread_mutex_lock(&self->mutex);
 
-        // Lógica da bateria (disparar, mover para recarga, etc.)
         switch (self->status) {
             case B_FIRING:
-            if (self->ammo > 0) {
-                if (rand() % 20 == 0) { 
-                                        
-                    // 1. Obter a posição do helicóptero de forma segura
-                    int helicopter_x, helicopter_y;
-                    pthread_mutex_lock(&helicopter.mutex);
-                    helicopter_x = helicopter.x;
-                    helicopter_y = helicopter.y;
-                    pthread_mutex_unlock(&helicopter.mutex);
+                if (self->ammo > 0) {
+                    if (rand() % 20 == 0) { 
+                        int helicopter_x, helicopter_y;
+                        pthread_mutex_lock(&helicopter.mutex);
+                        helicopter_x = helicopter.x;
+                        helicopter_y = helicopter.y;
+                        pthread_mutex_unlock(&helicopter.mutex);
 
-                    // 2. Calcular o vetor do inimigo para o helicóptero
-                    float vector_x = helicopter_x - self->x;
-                    float vector_y = helicopter_y - self->y;
+                        float vector_x = helicopter_x - self->x;
+                        float vector_y = helicopter_y - self->y;
 
-                    // 3. Normalizar o vetor (para que seu "comprimento" seja 1)
-                    float length = sqrt(vector_x * vector_x + vector_y * vector_y);
-                    float normalized_dx = 0, normalized_dy = -1; // Padrão: atirar para cima se algo der errado
-                    if (length > 0) {
-                        normalized_dx = vector_x / length;
-                        normalized_dy = vector_y / length;
-                    }
-
-                    // 4. Definir a velocidade do foguete
-                    float rocket_speed = 0.7f; // Ajuste este valor para mudar a velocidade
-
-                    // --- FIM DA NOVA LÓGICA DE MIRA ---
-                    
-                    pthread_mutex_lock(&mutex_rocket_list);
-                    for (int i = 0; i < MAX_ROCKETS; i++) {
-                        if (!active_rockets[i].active) {
-                            active_rockets[i].active = true;
-                            
-                            // Posição inicial
-                            active_rockets[i].x = self->x;
-                            active_rockets[i].y = self->y - 1;
-                            active_rockets[i].precise_x = self->x;
-                            active_rockets[i].precise_y = self->y - 1;
-
-                            // Definir a trajetória calculada
-                            active_rockets[i].dx = normalized_dx * rocket_speed;
-                            active_rockets[i].dy = normalized_dy * rocket_speed;
-
-                            active_rockets[i].owner_battery_id = self->id;
-
-                            pthread_create(&active_rockets[i].thread_id, NULL, rocket_thread_func, &rocket_idx_args[i]);
-                            pthread_detach(active_rockets[i].thread_id);
-
-                            self->ammo--;
-                            break;
+                        float length = sqrt(vector_x * vector_x + vector_y * vector_y);
+                        float normalized_dx = 0, normalized_dy = -1; 
+                        if (length > 0) {
+                            normalized_dx = vector_x / length;
+                            normalized_dy = vector_y / length;
                         }
+                        float rocket_speed = 0.7f; 
+                        
+                        pthread_mutex_lock(&mutex_rocket_list);
+                        for (int i = 0; i < MAX_ROCKETS; i++) {
+                            if (!active_rockets[i].active) {
+                                active_rockets[i].active = true;
+                                active_rockets[i].x = self->x;
+                                active_rockets[i].y = self->y - 1;
+                                active_rockets[i].precise_x = self->x;
+                                active_rockets[i].precise_y = self->y - 1;
+                                active_rockets[i].dx = normalized_dx * rocket_speed;
+                                active_rockets[i].dy = normalized_dy * rocket_speed;
+                                active_rockets[i].owner_battery_id = self->id;
+
+                                pthread_create(&active_rockets[i].thread_id, NULL, rocket_thread_func, &rocket_idx_args[i]);
+                                pthread_detach(active_rockets[i].thread_id);
+
+                                self->ammo--;
+                                break;
+                            }
+                        }
+                        pthread_mutex_unlock(&mutex_rocket_list);
                     }
-                    pthread_mutex_unlock(&mutex_rocket_list);
+                } else {
+                    self->status = B_MOVING_TO_BRIDGE;
                 }
-            } else {
-                self->status = B_MOVING_TO_BRIDGE;
-            }
-            break;
+                break;
 
             case B_MOVING_TO_BRIDGE:
                 if (self->y > BRIDGE_Y_LEVEL) self->y--;
                 else if (self->y < BRIDGE_Y_LEVEL) self->y++;
-                else { // Chegou na linha da ponte, agora move horizontalmente
-                    if (self->x < BRIDGE_START_X) self->x++; // Se à esquerda da ponte
-                    else if (self->x > BRIDGE_END_X) self->x--; // Se à direita da ponte
-                    else { // Está na entrada da ponte (ou já na ponte)
+                else { 
+                    if (self->x < BRIDGE_START_X) self->x++; 
+                    else if (self->x > BRIDGE_END_X) self->x--; 
+                    else { 
                          self->status = B_ON_BRIDGE_TO_DEPOT;
                     }
                 }
                 break;
 
             case B_ON_BRIDGE_TO_DEPOT:
-                pthread_mutex_unlock(&self->mutex); // Liberar mutex da bateria antes de pegar da ponte
+                pthread_mutex_unlock(&self->mutex); 
                 pthread_mutex_lock(&mutex_ponte);
-                pthread_mutex_lock(&self->mutex);   // Pegar mutex da bateria de novo
+                pthread_mutex_lock(&self->mutex); 
 
-                // Simular travessia (mover para a esquerda na ponte para o depósito)
                 while(self->x > DEPOT_X && self->y == BRIDGE_Y_LEVEL && game_running) {
                     self->x--;
                     pthread_mutex_unlock(&self->mutex);
-                    usleep(150000); // Movimento na ponte
-                    if(!game_running) { // Checa se o jogo acabou durante a travessia
-                        pthread_mutex_unlock(&mutex_ponte);
+                    usleep(150000); 
+                    if(!game_running) { 
+                        pthread_mutex_unlock(&mutex_ponte); // Libera a ponte se o jogo acabar
                         goto end_battery_loop;
                     }
                     pthread_mutex_lock(&self->mutex);
                 }
-                pthread_mutex_unlock(&mutex_ponte);
+                // ALTERADO: O MUTEX DA PONTE NÃO É MAIS LIBERADO AQUI!
+                // pthread_mutex_unlock(&mutex_ponte); 
                 if(game_running) self->status = B_MOVING_TO_DEPOT; else break;
                 break;
 
             case B_MOVING_TO_DEPOT:
-                // Da ponte (DEPOT_X, BRIDGE_Y_LEVEL) para o depósito (DEPOT_X, DEPOT_Y)
                 if (self->y > DEPOT_Y) self->y--;
-                else if (self->y < DEPOT_Y) self->y++; // Não deveria acontecer
-                else self->status = B_RECHARGING; // Chegou ao depósito
+                else if (self->y < DEPOT_Y) self->y++; 
+                else self->status = B_RECHARGING; 
                 break;
 
             case B_RECHARGING:
-                pthread_mutex_unlock(&self->mutex); // Liberar o seu antes de pegar o do depósito
+                pthread_mutex_unlock(&self->mutex); 
                 pthread_mutex_lock(&mutex_deposito_access);
+                
                 while (deposito_ocupado && game_running) {
                     pthread_cond_wait(&cond_deposito_livre, &mutex_deposito_access);
                 }
+
                 if(!game_running) {
                     pthread_mutex_unlock(&mutex_deposito_access);
+                    // O mutex da ponte ainda pode estar bloqueado por esta thread, libere-o
+                    pthread_mutex_unlock(&mutex_ponte);
                     goto end_battery_loop;
                 }
+
                 deposito_ocupado = true;
+                
+                // ALTERADO: AGORA QUE O DEPÓSITO FOI GARANTIDO, A PONTE PODE SER LIBERADA.
+                pthread_mutex_unlock(&mutex_ponte); 
+                
                 pthread_mutex_unlock(&mutex_deposito_access);
 
-                // Agora o depósito é "seu", recarregue
-                // (A thread da bateria ainda não tem seu próprio mutex aqui)
                 long recharge_duration_ms = self->recharge_min_ms + (rand() % (self->recharge_max_ms - self->recharge_min_ms + 1));
-                usleep(recharge_duration_ms * 1000); // Tempo de recarga
+                usleep(recharge_duration_ms * 1000); 
 
-                pthread_mutex_lock(&self->mutex); // Pegar seu mutex de volta para atualizar dados
+                pthread_mutex_lock(&self->mutex); 
                 self->ammo = self->max_ammo;
                 pthread_mutex_unlock(&self->mutex);
 
@@ -590,13 +566,11 @@ void* battery_thread_func(void* arg) {
                 pthread_cond_signal(&cond_deposito_livre);
                 pthread_mutex_unlock(&mutex_deposito_access);
 
-                pthread_mutex_lock(&self->mutex); // Readquirir para mudar status
+                pthread_mutex_lock(&self->mutex); 
                 if(game_running) self->status = B_MOVING_FROM_DEPOT;
-                // (Seu mutex já está travado no final do case)
                 break;
 
             case B_MOVING_FROM_DEPOT:
-                // Do depósito (DEPOT_X, DEPOT_Y) para a entrada da ponte (DEPOT_X, BRIDGE_Y_LEVEL)
                 if (self->y < BRIDGE_Y_LEVEL) self->y++;
                 else self->status = B_ON_BRIDGE_FROM_DEPOT;
                 break;
@@ -606,61 +580,54 @@ void* battery_thread_func(void* arg) {
                  pthread_mutex_lock(&mutex_ponte);
                  pthread_mutex_lock(&self->mutex);
 
-                // Simular travessia de volta (mover para a direita na ponte)
-                int target_bridge_exit_x = (self->combat_x < SCREEN_WIDTH / 2) ? BRIDGE_START_X : BRIDGE_END_X;
-                while(self->x < target_bridge_exit_x && self->y == BRIDGE_Y_LEVEL && game_running) {
+                int target_bridge_exit_x = self->combat_x; 
+                 while(self->x < target_bridge_exit_x && self->y == BRIDGE_Y_LEVEL && game_running) {
                      self->x++;
                      pthread_mutex_unlock(&self->mutex);
                      usleep(150000);
                      if(!game_running) {
-                        pthread_mutex_unlock(&mutex_ponte);
-                        goto end_battery_loop;
+                         pthread_mutex_unlock(&mutex_ponte);
+                         goto end_battery_loop;
                      }
                      pthread_mutex_lock(&self->mutex);
-                }
-                pthread_mutex_unlock(&mutex_ponte);
-                if(game_running) self->status = B_RETURNING_TO_COMBAT; else break;
-                break;
+                 }
+                 pthread_mutex_unlock(&mutex_ponte);
+                 if(game_running) self->status = B_RETURNING_TO_COMBAT; else break;
+                 break;
 
             case B_RETURNING_TO_COMBAT:
                 if (self->y < self->combat_y) self->y++;
-                else if (self->y > self->combat_y) self->y--; // Não deveria
-                else { // Y está correto, ajustar X
+                else if (self->y > self->combat_y) self->y--; 
+                else { 
                     if (self->x < self->combat_x) self->x++;
                     else if (self->x > self->combat_x) self->x--;
-                    else self->status = B_FIRING; // Chegou
+                    else self->status = B_FIRING; 
                 }
                 break;
         }
         pthread_mutex_unlock(&self->mutex);
-        usleep(200000); // Delay para a lógica da bateria (0.2s)
+        usleep(200000); 
     }
 end_battery_loop:
-    // Tentar liberar o mutex da bateria se saiu via goto
-    // pthread_mutex_trylock(&self->mutex);
-    // pthread_mutex_unlock(&self->mutex);
     return NULL;
 }
 
 
 void* rocket_thread_func(void* arg) {
     int rocket_idx = *((int*)arg);
-    Rocket* self = &active_rockets[rocket_idx]; // Ponteiro para o foguete para facilitar
+    Rocket* self = &active_rockets[rocket_idx];
 
     while (game_running) {
         bool still_active = false;
         
         pthread_mutex_lock(&mutex_rocket_list);
         if (self->active) {
-            // Atualiza a posição precisa com base na velocidade
             self->precise_x += self->dx;
             self->precise_y += self->dy;
 
-            // Atualiza a posição de renderização (inteira)
-            self->x = (int)self->precise_x;
-            self->y = (int)self->precise_y;
+            self->x = (int)round(self->precise_x);
+            self->y = (int)round(self->precise_y);
             
-            // Condição para desativar o foguete (saiu da tela)
             if (self->y < 0 || self->y >= SCREEN_HEIGHT || self->x < 0 || self->x >= SCREEN_WIDTH) {
                 self->active = false;
             }
@@ -669,40 +636,37 @@ void* rocket_thread_func(void* arg) {
         pthread_mutex_unlock(&mutex_rocket_list);
 
         if (!still_active) {
-            break; // Termina a thread se o foguete não está mais ativo
+            break; 
         }
 
-        usleep(70000); // Velocidade do foguete (0.07s)
+        usleep(70000); 
     }
     return NULL;
 }
 
 void* game_manager_thread_func(void* arg) {
     while (game_running) {
-        // Monitoramento das condições de término (já feito em outras threads, aqui apenas reage)
         pthread_mutex_lock(&game_state.mutex);
         if (game_state.game_over_flag) {
-            game_running = false; // Sinaliza para todas as threads terminarem
+            game_running = false; 
             pthread_mutex_unlock(&game_state.mutex);
             break;
         }
         pthread_mutex_unlock(&game_state.mutex);
 
-        // Renderização da UI
         clear();
 
-        // Desenhar bordas e elementos estáticos
-        for(int i=0; i<SCREEN_WIDTH; ++i) mvprintw(0, i, "-"); // Topo (Helicóptero explode aqui)
-        for(int i=0; i<SCREEN_WIDTH; ++i) mvprintw(SCREEN_HEIGHT-1, i, "-"); // Chão
-        for(int i=0; i<SCREEN_HEIGHT; ++i) {mvprintw(i, 0, "|"); mvprintw(i, SCREEN_WIDTH-1, "|");}
-
+        for(int i=0; i<SCREEN_WIDTH; ++i) mvprintw(0, i, "-"); 
+        for(int i=0; i<SCREEN_WIDTH; ++i) mvprintw(SCREEN_HEIGHT-1, i, "-");
+        for(int i=1; i<SCREEN_HEIGHT-1; ++i) {mvprintw(i, 0, "|"); mvprintw(i, SCREEN_WIDTH-1, "|");}
+        
+        mvprintw(ORIGIN_Y, ORIGIN_X, "%c", PLATFORM_CHAR);
         mvprintw(PLATFORM_Y, PLATFORM_X, "%c", PLATFORM_CHAR);
         for (int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
             if (soldiers[i].active) {
                 mvprintw(soldiers[i].y, soldiers[i].x, "%c", SOLDIER_CHAR);
             }
         }
-        //mvprintw(0, 2, "Restam: %2d", game_state.soldiers_at_origin_count);
         mvprintw(DEPOT_Y, DEPOT_X, "%c", DEPOT_CHAR);
         for (int x = BRIDGE_START_X; x <= BRIDGE_END_X; ++x) {
             mvprintw(BRIDGE_Y_LEVEL, x, "%c", BRIDGE_CHAR);
@@ -715,27 +679,35 @@ void* game_manager_thread_func(void* arg) {
             mvprintw(helicopter.y, helicopter.x, "%c", HELICOPTER_CHAR);
         else
              mvprintw(helicopter.y, helicopter.x, "X"); // Explosão
-        mvprintw(SCREEN_HEIGHT -1 , SCREEN_WIDTH / 2 - 15, "Soldados a Bordo: %d | Resgatados: %d/%d",
-                 helicopter.soldiers_on_board, helicopter.soldiers_rescued_total, SOLDIERS_TO_WIN);
+        
         pthread_mutex_unlock(&helicopter.mutex);
+
+        // HUD
+        mvprintw(SCREEN_HEIGHT -1 , SCREEN_WIDTH / 2 - 25, 
+            "Soldados a Bordo: %d | Resgatados: %d/%d | Restam na Ilha: %d",
+            helicopter.soldiers_on_board, helicopter.soldiers_rescued_total, SOLDIERS_TO_WIN,
+            game_state.soldiers_at_origin_count);
+
 
         // Baterias
         for (int i = 0; i < 2; i++) {
             pthread_mutex_lock(&batteries[i].mutex);
             mvprintw(batteries[i].y, batteries[i].x, "%c%d", BATTERY_CHAR, batteries[i].id);
-            // Info da bateria (status, munição) - opcional
+            
             char status_char = '?';
+            const char* status_str = "UNKNOWN";
             switch(batteries[i].status){
-                case B_FIRING: status_char = 'F'; break;
-                case B_MOVING_TO_BRIDGE: status_char = '>'; break;
-                case B_ON_BRIDGE_TO_DEPOT: status_char = '='; break;
-                case B_MOVING_TO_DEPOT: status_char = 'v'; break;
-                case B_RECHARGING: status_char = 'R'; break;
-                case B_MOVING_FROM_DEPOT: status_char = '^'; break;
-                case B_ON_BRIDGE_FROM_DEPOT: status_char = '='; break;
-                case B_RETURNING_TO_COMBAT: status_char = '<'; break;
+                case B_FIRING:               status_str = "ATIRANDO "; break;
+                case B_MOVING_TO_BRIDGE:     status_str = "INDO PONTE"; break;
+                case B_ON_BRIDGE_TO_DEPOT:   status_str = "NA PONTE->"; break;
+                case B_MOVING_TO_DEPOT:      status_str = "INDO DEPOT"; break;
+                case B_RECHARGING:           status_str = "RECARGA  "; break;
+                case B_MOVING_FROM_DEPOT:    status_str = "SAINDO   "; break;
+                case B_ON_BRIDGE_FROM_DEPOT: status_str = "<-NA PONTE"; break;
+                case B_RETURNING_TO_COMBAT:  status_str = "VOLTANDO "; break;
             }
-            mvprintw(0, 5 + i*20, "B%d: Ammo %2d Stat: %c", i, batteries[i].ammo, status_char);
+            mvprintw(0, 5 + i*25, "B%d: Ammo %2d/%-2d | Status: %s", 
+                i, batteries[i].ammo, batteries[i].max_ammo, status_str);
             pthread_mutex_unlock(&batteries[i].mutex);
         }
 
@@ -749,7 +721,7 @@ void* game_manager_thread_func(void* arg) {
         pthread_mutex_unlock(&mutex_rocket_list);
 
         refresh();
-        usleep(50000); // Taxa de atualização da tela (20 FPS)
+        usleep(50000); 
     }
     return NULL;
 }
