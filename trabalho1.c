@@ -606,6 +606,7 @@ void* battery_thread_func(void* arg) {
                 if (self->x < target_x) {
                     self->x++;                           /* anda da esquerda (10) até (70)     */
                 } else {                                 /* chegou ao fim da ponte             */
+                    pthread_mutex_unlock(&mutex_ponte);  /* libera a ponte o mais cedo possível*/
                     self->status = B_RETURNING_TO_COMBAT;
                 }
                 break;
@@ -616,7 +617,6 @@ void* battery_thread_func(void* arg) {
                 if (self->y < self->combat_y) {
                     self->y++;                           /* descendo até o chão                */
                 } else {
-                    pthread_mutex_unlock(&mutex_ponte);  /* libera a ponte o mais cedo possível*/
                     self->status = B_FINAL_POSITIONING;
                 }
                 break;
