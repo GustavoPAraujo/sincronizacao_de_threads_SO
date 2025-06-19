@@ -578,39 +578,48 @@ void* battery_thread_func(void* arg) {
                 pthread_mutex_unlock(&mutex_deposito_access);
                 break;
             
-            // --- FASE 2: VOLTA PARA A POSIÇÃO DE COMBATE ---
+            /* ------------- FASE 2: volta do depósito para o combate ------------- */
+
+            /* 1) Do depósito até o início da ponte (permanece igual) */
             case B_MOVING_FROM_DEPOT:
-                if (self->x < BRIDGE_START_X) self->x++;
+                /* anda no solo até encostar na cabeceira ESQUERDA  (x = 10) */
+                if (self->x < BRIDGE_START_X)      self->x++;
+                /* depois sobe até o nível da ponte                    */
                 else if (self->y < BRIDGE_Y_LEVEL) self->y++;
-                else {
-                    self->status = B_REQUESTING_BRIDGE_TO_COMBAT;
-                }
+                /* chegou: pede o mutex e muda de estado                */
+                else                               self->status = B_REQUESTING_BRIDGE_TO_COMBAT;
                 break;
 
+            /* 2) Garante exclusão mútua (permanece igual) */
             case B_REQUESTING_BRIDGE_TO_COMBAT:
-                 pthread_mutex_unlock(&self->mutex);
-                 pthread_mutex_lock(&mutex_ponte);
-                 pthread_mutex_lock(&self->mutex);
-                 self->status = B_ON_BRIDGE_FROM_DEPOT;
-                 break;
+                pthread_mutex_unlock(&self->mutex);      /* libera o próprio mutex             */
+                pthread_mutex_lock(&mutex_ponte);        /* trava a ponte                      */
+                pthread_mutex_lock(&self->mutex);        /* volta a trancar a própria bateria  */
+                self->status = B_ON_BRIDGE_FROM_DEPOT;
+                break;
 
-            case B_ON_BRIDGE_FROM_DEPOT:
-                target_x = (self->id == 0) ? BRIDGE_START_X : BRIDGE_END_X;
-                if (self->x < target_x) self->x++;
-                else if (self->x > target_x) self->x--; // Adicionado para B0, embora não deva ser usado com a lógica atual
-                else {
+            /* 3) ATRAVESSA a ponte — agora sempre até BRIDGE_END_X     */
+            case B_ON_BRIDGE_FROM_DEPOT: {
+                const int target_x = BRIDGE_END_X;       /*  <-- 70 (cabeceira direita)        */
+
+                if (self->x < target_x) {
+                    self->x++;                           /* anda da esquerda (10) até (70)     */
+                } else {                                 /* chegou ao fim da ponte             */
                     self->status = B_RETURNING_TO_COMBAT;
                 }
                 break;
+            }
 
+            /* 4) Desce da ponte e solta o mutex                         */
             case B_RETURNING_TO_COMBAT:
-                if (self->y < self->combat_y) self->y++;
-                else {
-                    pthread_mutex_unlock(&mutex_ponte);
+                if (self->y < self->combat_y) {
+                    self->y++;                           /* descendo até o chão                */
+                } else {
+                    pthread_mutex_unlock(&mutex_ponte);  /* libera a ponte o mais cedo possível*/
                     self->status = B_FINAL_POSITIONING;
                 }
                 break;
-            
+                
             case B_FINAL_POSITIONING:
                 if (self->x != self->combat_x) {
                     if(self->x < self->combat_x) self->x++; else self->x--;
