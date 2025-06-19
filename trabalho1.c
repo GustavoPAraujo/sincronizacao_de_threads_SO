@@ -33,6 +33,7 @@
 #define RECHARGE_TIME_MEDIUM_MAX_MS 300
 #define RECHARGE_TIME_HARD_MIN_MS 300
 #define RECHARGE_TIME_HARD_MAX_MS 500
+#define BOARDING_INTERVAL_MS 400
 
 
 // Posições (aproximadas, podem precisar de ajuste)
@@ -114,6 +115,9 @@ typedef struct {
     bool active;
 } Soldier;
 
+struct timespec ts;
+long last_board_ms = 0;
+
 // --- Variáveis Globais ---
 Helicopter helicopter;
 Battery batteries[2];
@@ -139,8 +143,8 @@ void init_game_elements() {
     // Helicóptero
     pthread_mutex_init(&helicopter.mutex, NULL);
     pthread_mutex_lock(&helicopter.mutex);
-    helicopter.x = ORIGIN_X;
-    helicopter.y = ORIGIN_Y;
+    helicopter.x = PLATFORM_X;
+    helicopter.y = PLATFORM_Y;
     helicopter.soldiers_on_board = 0;
     helicopter.soldiers_rescued_total = 0;
     helicopter.status = H_ACTIVE;
@@ -156,18 +160,9 @@ void init_game_elements() {
 
     // Soldados
     int max_soldier_x = SCREEN_WIDTH/2 - 2;
-    for(int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
-        do {
-            // escolhe X na metade esquerda (fora da HUD)
-            soldiers[i].x = 1 + rand() % max_soldier_x;
-            // escolhe Y entre 1 e SCREEN_HEIGHT-3 (evita bordas)
-            soldiers[i].y = 1 + rand() % (SCREEN_HEIGHT - 3);
-            // recusa se cair na ponte
-        } while (
-            (soldiers[i].y == BRIDGE_Y_LEVEL
-            && soldiers[i].x >= BRIDGE_START_X
-            && soldiers[i].x <= BRIDGE_END_X)
-        );
+    for (int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
+        soldiers[i].x      = ORIGIN_X;
+        soldiers[i].y      = ORIGIN_Y;
         soldiers[i].active = true;
     }
 
@@ -395,17 +390,23 @@ void* helicopter_thread_func(void* arg) {
 
         // Lógica de Soldados
         pthread_mutex_lock(&game_state.mutex);
-        for(int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
-            if (soldiers[i].active
-             && helicopter.x == soldiers[i].x
-             && helicopter.y == soldiers[i].y
-             && helicopter.soldiers_on_board < 10) {
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        long now_ms = ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+
+        for (int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
+            if (soldiers[i].active &&
+                helicopter.x == soldiers[i].x &&
+                helicopter.y == soldiers[i].y &&
+                helicopter.soldiers_on_board < 10 &&
+                now_ms - last_board_ms >= BOARDING_INTERVAL_MS) {
+
                 soldiers[i].active = false;
                 helicopter.soldiers_on_board++;
                 game_state.soldiers_at_origin_count--;
+                last_board_ms = now_ms;          /* reinicia cronômetro */
                 break;
             }
-        }    
+        } 
         if (helicopter.x == PLATFORM_X && helicopter.y == PLATFORM_Y && helicopter.soldiers_on_board > 0) {
             helicopter.soldiers_rescued_total += helicopter.soldiers_on_board;
             helicopter.soldiers_on_board = 0;
@@ -619,7 +620,7 @@ void* battery_thread_func(void* arg) {
                     self->status = B_FINAL_POSITIONING;
                 }
                 break;
-                
+
             case B_FINAL_POSITIONING:
                 if (self->x != self->combat_x) {
                     if(self->x < self->combat_x) self->x++; else self->x--;
@@ -688,10 +689,8 @@ void* game_manager_thread_func(void* arg) {
         
         mvprintw(ORIGIN_Y, ORIGIN_X, "%c", PLATFORM_CHAR);
         mvprintw(PLATFORM_Y, PLATFORM_X, "%c", PLATFORM_CHAR);
-        for (int i = 0; i < INITIAL_SOLDIERS_AT_ORIGIN; ++i) {
-            if (soldiers[i].active) {
-                mvprintw(soldiers[i].y, soldiers[i].x, "%c", SOLDIER_CHAR);
-            }
+        if (game_state.soldiers_at_origin_count > 0) {
+            mvprintw(ORIGIN_Y, ORIGIN_X, "%c", SOLDIER_CHAR);
         }
         mvprintw(DEPOT_Y, DEPOT_X, "%c", DEPOT_CHAR);
         for (int x = BRIDGE_START_X; x <= BRIDGE_END_X; ++x) {
