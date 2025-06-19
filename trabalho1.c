@@ -70,8 +70,20 @@ typedef struct {
     int combat_x, combat_y; // Posição original de combate
     int ammo;
     int max_ammo;
-    enum { B_FIRING, B_MOVING_TO_BRIDGE, B_ON_BRIDGE_TO_DEPOT, B_MOVING_TO_DEPOT, B_RECHARGING,
-           B_MOVING_FROM_DEPOT, B_ON_BRIDGE_FROM_DEPOT, B_RETURNING_TO_COMBAT } status;
+    // Lógica de estado da bateria refatorada
+    enum { 
+        B_FIRING, 
+        B_REQUESTING_BRIDGE_TO_DEPOT,
+        B_MOVING_TO_BRIDGE, 
+        B_ON_BRIDGE_TO_DEPOT, 
+        B_MOVING_TO_DEPOT, 
+        B_RECHARGING,
+        B_MOVING_FROM_DEPOT, 
+        B_REQUESTING_BRIDGE_TO_COMBAT,
+        B_ON_BRIDGE_FROM_DEPOT, 
+        B_RETURNING_TO_COMBAT,
+        B_FINAL_POSITIONING
+    } status;
     pthread_mutex_t mutex;
     long recharge_min_ms;
     long recharge_max_ms;
@@ -443,13 +455,15 @@ void* battery_thread_func(void* arg) {
     int rocket_idx_args[MAX_ROCKETS]; 
     for(int i=0; i<MAX_ROCKETS; ++i) rocket_idx_args[i] = i;
 
-
     while (game_running) {
         pthread_mutex_lock(&self->mutex);
+        int target_x; // Variável para o destino horizontal
 
         switch (self->status) {
             case B_FIRING:
-                if (self->ammo > 0) {
+                if (self->ammo <= 0) {
+                    self->status = B_REQUESTING_BRIDGE_TO_DEPOT;
+                } else {
                     if (rand() % 20 == 0) { 
                         int helicopter_x, helicopter_y;
                         pthread_mutex_lock(&helicopter.mutex);
@@ -489,69 +503,66 @@ void* battery_thread_func(void* arg) {
                         }
                         pthread_mutex_unlock(&mutex_rocket_list);
                     }
-                } else {
-                    self->status = B_MOVING_TO_BRIDGE;
                 }
                 break;
 
-            case B_MOVING_TO_BRIDGE:
-                if (self->y > BRIDGE_Y_LEVEL) self->y--;
-                else if (self->y < BRIDGE_Y_LEVEL) self->y++;
-                else { 
-                    if (self->x < BRIDGE_START_X) self->x++; 
-                    else if (self->x > BRIDGE_END_X) self->x--; 
-                    else { 
-                         self->status = B_ON_BRIDGE_TO_DEPOT;
-                    }
-                }
-                break;
-
-            case B_ON_BRIDGE_TO_DEPOT:
+            // --- FASE 1: IDA PARA O DEPÓSITO ---
+            case B_REQUESTING_BRIDGE_TO_DEPOT:
                 pthread_mutex_unlock(&self->mutex); 
-                pthread_mutex_lock(&mutex_ponte);
-                pthread_mutex_lock(&self->mutex); 
+                pthread_mutex_lock(&mutex_ponte);   
+                pthread_mutex_lock(&self->mutex);   
+                self->status = B_MOVING_TO_BRIDGE;
+                break;
 
-                while(self->x > DEPOT_X && self->y == BRIDGE_Y_LEVEL && game_running) {
-                    self->x--;
-                    pthread_mutex_unlock(&self->mutex);
-                    usleep(150000); 
-                    if(!game_running) { 
-                        pthread_mutex_unlock(&mutex_ponte); // Libera a ponte se o jogo acabar
-                        goto end_battery_loop;
-                    }
-                    pthread_mutex_lock(&self->mutex);
+            case B_MOVING_TO_BRIDGE: 
+                /*  B0 entra pela direita    (BRIDGE_END_X)
+                    B1 entra pela direita    (já fazia isso)                */
+                int entry_x = (self->id == 0) ? BRIDGE_END_X   /* 70  */
+                                            : BRIDGE_END_X; /* idem */
+
+                /* 1. Alinha X primeiro  */
+                if (self->x != entry_x) {
+                    self->x += (self->x < entry_x) ? 1 : -1;
+
+                /* 2. Depois sobe Y      */
+                } else if (self->y > BRIDGE_Y_LEVEL) {
+                    self->y--;
+
+                /* 3. Chegou ao topo da cabeceira → atravessa ponte */
+                } else {
+                    self->status = B_ON_BRIDGE_TO_DEPOT;
                 }
-                // ALTERADO: O MUTEX DA PONTE NÃO É MAIS LIBERADO AQUI!
-                // pthread_mutex_unlock(&mutex_ponte); 
-                if(game_running) self->status = B_MOVING_TO_DEPOT; else break;
+                break;
+            
+            case B_ON_BRIDGE_TO_DEPOT:
+                target_x = BRIDGE_START_X;
+                if (self->x > target_x) self->x--;
+                else {
+                    self->status = B_MOVING_TO_DEPOT;
+                }
                 break;
 
             case B_MOVING_TO_DEPOT:
-                if (self->y > DEPOT_Y) self->y--;
-                else if (self->y < DEPOT_Y) self->y++; 
-                else self->status = B_RECHARGING; 
+                if (self->x > DEPOT_X) self->x--;
+                else if (self->y > DEPOT_Y) self->y--;
+                else {
+                    pthread_mutex_unlock(&mutex_ponte);
+                    self->status = B_RECHARGING;
+                }
                 break;
 
             case B_RECHARGING:
-                pthread_mutex_unlock(&self->mutex); 
+                pthread_mutex_unlock(&self->mutex);
+
                 pthread_mutex_lock(&mutex_deposito_access);
-                
                 while (deposito_ocupado && game_running) {
                     pthread_cond_wait(&cond_deposito_livre, &mutex_deposito_access);
                 }
-
                 if(!game_running) {
                     pthread_mutex_unlock(&mutex_deposito_access);
-                    // O mutex da ponte ainda pode estar bloqueado por esta thread, libere-o
-                    pthread_mutex_unlock(&mutex_ponte);
                     goto end_battery_loop;
                 }
-
                 deposito_ocupado = true;
-                
-                // ALTERADO: AGORA QUE O DEPÓSITO FOI GARANTIDO, A PONTE PODE SER LIBERADA.
-                pthread_mutex_unlock(&mutex_ponte); 
-                
                 pthread_mutex_unlock(&mutex_deposito_access);
 
                 long recharge_duration_ms = self->recharge_min_ms + (rand() % (self->recharge_max_ms - self->recharge_min_ms + 1));
@@ -559,56 +570,62 @@ void* battery_thread_func(void* arg) {
 
                 pthread_mutex_lock(&self->mutex); 
                 self->ammo = self->max_ammo;
-                pthread_mutex_unlock(&self->mutex);
+                self->status = B_MOVING_FROM_DEPOT;
 
                 pthread_mutex_lock(&mutex_deposito_access);
                 deposito_ocupado = false;
                 pthread_cond_signal(&cond_deposito_livre);
                 pthread_mutex_unlock(&mutex_deposito_access);
-
-                pthread_mutex_lock(&self->mutex); 
-                if(game_running) self->status = B_MOVING_FROM_DEPOT;
                 break;
-
+            
+            // --- FASE 2: VOLTA PARA A POSIÇÃO DE COMBATE ---
             case B_MOVING_FROM_DEPOT:
-                if (self->y < BRIDGE_Y_LEVEL) self->y++;
-                else self->status = B_ON_BRIDGE_FROM_DEPOT;
+                if (self->x < BRIDGE_START_X) self->x++;
+                else if (self->y < BRIDGE_Y_LEVEL) self->y++;
+                else {
+                    self->status = B_REQUESTING_BRIDGE_TO_COMBAT;
+                }
                 break;
 
-            case B_ON_BRIDGE_FROM_DEPOT:
+            case B_REQUESTING_BRIDGE_TO_COMBAT:
                  pthread_mutex_unlock(&self->mutex);
                  pthread_mutex_lock(&mutex_ponte);
                  pthread_mutex_lock(&self->mutex);
-
-                int target_bridge_exit_x = self->combat_x; 
-                 while(self->x < target_bridge_exit_x && self->y == BRIDGE_Y_LEVEL && game_running) {
-                     self->x++;
-                     pthread_mutex_unlock(&self->mutex);
-                     usleep(150000);
-                     if(!game_running) {
-                         pthread_mutex_unlock(&mutex_ponte);
-                         goto end_battery_loop;
-                     }
-                     pthread_mutex_lock(&self->mutex);
-                 }
-                 pthread_mutex_unlock(&mutex_ponte);
-                 if(game_running) self->status = B_RETURNING_TO_COMBAT; else break;
+                 self->status = B_ON_BRIDGE_FROM_DEPOT;
                  break;
+
+            case B_ON_BRIDGE_FROM_DEPOT:
+                target_x = (self->id == 0) ? BRIDGE_START_X : BRIDGE_END_X;
+                if (self->x < target_x) self->x++;
+                else if (self->x > target_x) self->x--; // Adicionado para B0, embora não deva ser usado com a lógica atual
+                else {
+                    self->status = B_RETURNING_TO_COMBAT;
+                }
+                break;
 
             case B_RETURNING_TO_COMBAT:
                 if (self->y < self->combat_y) self->y++;
-                else if (self->y > self->combat_y) self->y--; 
-                else { 
-                    if (self->x < self->combat_x) self->x++;
-                    else if (self->x > self->combat_x) self->x--;
-                    else self->status = B_FIRING; 
+                else {
+                    pthread_mutex_unlock(&mutex_ponte);
+                    self->status = B_FINAL_POSITIONING;
+                }
+                break;
+            
+            case B_FINAL_POSITIONING:
+                if (self->x != self->combat_x) {
+                    if(self->x < self->combat_x) self->x++; else self->x--;
+                } else {
+                    self->status = B_FIRING;
                 }
                 break;
         }
         pthread_mutex_unlock(&self->mutex);
-        usleep(200000); 
+        usleep(150000); 
     }
 end_battery_loop:
+    if (pthread_mutex_trylock(&mutex_ponte) == 0) {
+        pthread_mutex_unlock(&mutex_ponte);
+    }
     return NULL;
 }
 
@@ -694,17 +711,19 @@ void* game_manager_thread_func(void* arg) {
             pthread_mutex_lock(&batteries[i].mutex);
             mvprintw(batteries[i].y, batteries[i].x, "%c%d", BATTERY_CHAR, batteries[i].id);
             
-            char status_char = '?';
             const char* status_str = "UNKNOWN";
             switch(batteries[i].status){
-                case B_FIRING:               status_str = "ATIRANDO "; break;
-                case B_MOVING_TO_BRIDGE:     status_str = "INDO PONTE"; break;
-                case B_ON_BRIDGE_TO_DEPOT:   status_str = "NA PONTE->"; break;
-                case B_MOVING_TO_DEPOT:      status_str = "INDO DEPOT"; break;
-                case B_RECHARGING:           status_str = "RECARGA  "; break;
-                case B_MOVING_FROM_DEPOT:    status_str = "SAINDO   "; break;
-                case B_ON_BRIDGE_FROM_DEPOT: status_str = "<-NA PONTE"; break;
-                case B_RETURNING_TO_COMBAT:  status_str = "VOLTANDO "; break;
+                case B_FIRING:                       status_str = "ATIRANDO     "; break;
+                case B_REQUESTING_BRIDGE_TO_DEPOT:   status_str = "AGUARD. PONTE"; break;
+                case B_MOVING_TO_BRIDGE:             status_str = "INDO P/ PONTE"; break;
+                case B_ON_BRIDGE_TO_DEPOT:           status_str = "NA PONTE -> D"; break;
+                case B_MOVING_TO_DEPOT:              status_str = "SAINDO P/ DEP"; break;
+                case B_RECHARGING:                   status_str = "RECARREGANDO "; break;
+                case B_MOVING_FROM_DEPOT:            status_str = "VOLTANDO PNT "; break;
+                case B_REQUESTING_BRIDGE_TO_COMBAT:  status_str = "AGUARD. PONTE"; break;
+                case B_ON_BRIDGE_FROM_DEPOT:         status_str = "NA PONTE -> C"; break;
+                case B_RETURNING_TO_COMBAT:          status_str = "SAINDO P/ CMB"; break;
+                case B_FINAL_POSITIONING:            status_str = "POS. FINAL   "; break;
             }
             mvprintw(0, 5 + i*25, "B%d: Ammo %2d/%-2d | Status: %s", 
                 i, batteries[i].ammo, batteries[i].max_ammo, status_str);
