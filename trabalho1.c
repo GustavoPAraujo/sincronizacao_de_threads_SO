@@ -352,7 +352,15 @@ void* helicopter_thread_func(void* arg) {
         // Colisão com chão/plataforma/depósito/baterias (obstáculos fixos)
         if (helicopter.y == PLATFORM_Y && helicopter.x == PLATFORM_X) { /* Não explode na plataforma */ }
         else if (helicopter.y == ORIGIN_Y && helicopter.x == ORIGIN_X) { /* Não explode na origem */ }
-        else if (helicopter.y == DEPOT_Y && helicopter.x == DEPOT_X) { /* Não explode no depósito - mas não deveria estar lá */ }
+        else if (helicopter.y == DEPOT_Y && helicopter.x == DEPOT_X) {
+            helicopter.status = H_EXPLODED;
+            pthread_mutex_lock(&game_state.mutex);
+            game_state.game_over_flag = true;
+            game_running = false;
+            pthread_mutex_unlock(&game_state.mutex);
+            pthread_mutex_unlock(&helicopter.mutex);
+            break; 
+        }
         else if (helicopter.y >= SCREEN_HEIGHT - 1) { // Chão genérico
             helicopter.status = H_EXPLODED;
              pthread_mutex_lock(&game_state.mutex);
