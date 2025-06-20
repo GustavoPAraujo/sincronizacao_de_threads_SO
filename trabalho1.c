@@ -323,10 +323,11 @@ void* helicopter_thread_func(void* arg) {
 
         // Movimentação
         switch (input) {
-            case KEY_UP:    helicopter.y--; break;
-            case KEY_DOWN:  helicopter.y++; break;
-            case KEY_LEFT:  helicopter.x--; break;
-            case KEY_RIGHT: helicopter.x++; break;
+            case KEY_UP:    helicopter.y--;  flushinp(); break;
+            case KEY_DOWN:  helicopter.y++;  flushinp(); break;
+            case KEY_LEFT:  helicopter.x--;  flushinp(); break;
+            case KEY_RIGHT: helicopter.x++;  flushinp(); break;
+            default: /* nada */;
         }
 
         // Limites da tela
