@@ -330,22 +330,23 @@ void* helicopter_thread_func(void* arg) {
         }
 
         // Limites da tela
-        if (helicopter.x < 1) helicopter.x = 1;
-        if (helicopter.x >= SCREEN_WIDTH -1) helicopter.x = SCREEN_WIDTH - 2;
-        if (helicopter.y < 1) helicopter.y = 1; 
-        if (helicopter.y >= SCREEN_HEIGHT -1) helicopter.y = SCREEN_HEIGHT - 2;
+        if (helicopter.x < 0)                 helicopter.x = 0;
+        if (helicopter.x >  SCREEN_WIDTH - 1) helicopter.x = SCREEN_WIDTH - 1;
+        if (helicopter.y < 0)                 helicopter.y = 0;
+        if (helicopter.y >  SCREEN_HEIGHT - 1)helicopter.y = SCREEN_HEIGHT - 1;
         
         // Colisão com o topo (borda)
-        if (helicopter.y == 0) {
+        if (helicopter.x == 0 || helicopter.x == SCREEN_WIDTH  - 1 ||
+            helicopter.y == 0 || helicopter.y == SCREEN_HEIGHT - 1) {
+
             helicopter.status = H_EXPLODED;
             pthread_mutex_lock(&game_state.mutex);
             game_state.game_over_flag = true;
             game_running = false;
             pthread_mutex_unlock(&game_state.mutex);
             pthread_mutex_unlock(&helicopter.mutex);
-            break;
+            break;                          /* sai do loop da thread   */
         }
-
 
         // Colisão com chão/plataforma/depósito/baterias (obstáculos fixos)
         if (helicopter.y == PLATFORM_Y && helicopter.x == PLATFORM_X) { /* Não explode na plataforma */ }
